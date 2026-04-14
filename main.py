@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import os
@@ -10,19 +9,17 @@ from datetime import datetime
 
 app = FastAPI(title="JARVIS Backend", version="1.0.0")
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
-
+# ── CORS — allow ALL origins (fixes browser blocking) ─────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ── Config ────────────────────────────────────────────────────────────────────
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL   = "llama3-8b-8192"
 
@@ -50,56 +47,34 @@ def root():
 def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
-
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured on server.")
+
     messages = [{"role": "system", "content": JARVIS_SYSTEM}]
     for m in req.history:
         messages.append({"role": m.role, "content": m.content})
     messages.append({"role": "user", "content": req.message})
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            GROQ_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={"model": GROQ_MODEL, "messages": messages, "max_tokens": 1024},
-            timeout=30,
-        )
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                GROQ_URL,
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"model": GROQ_MODEL, "messages": messages, "max_tokens": 1024},
+            )
 
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"Groq API error: {resp.text}")
 
-    reply = resp.json()["choices"][0]["message"]["content"]
-    return {"reply": reply, "timestamp": datetime.utcnow().isoformat()}
+        reply = resp.json()["choices"][0]["message"]["content"]
+        return {"reply": reply, "timestamp": datetime.utcnow().isoformat()}
 
-
-@app.post("/chat/stream")
-async def chat_stream(req: ChatRequest):
-    messages = [{"role": "system", "content": JARVIS_SYSTEM}]
-    for m in req.history:
-        messages.append({"role": m.role, "content": m.content})
-    messages.append({"role": "user", "content": req.message})
-
-    async def generate():
-        async with httpx.AsyncClient(timeout=60) as client:
-            async with client.stream(
-                "POST", GROQ_URL,
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                json={"model": GROQ_MODEL, "messages": messages, "max_tokens": 1024, "stream": True},
-            ) as resp:
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = line[6:]
-                    if data == "[DONE]":
-                        yield "data: [DONE]\n\n"
-                        break
-                    try:
-                        chunk = json.loads(data)
-                        token = chunk["choices"][0]["delta"].get("content", "")
-                        if token:
-                            yield f"data: {json.dumps({'token': token})}\n\n"
-                    except Exception:
-                        pass
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Request to Groq timed out.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
