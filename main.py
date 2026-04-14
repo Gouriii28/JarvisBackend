@@ -21,7 +21,7 @@ app.add_middleware(
 # ── Config ────────────────────────────────────────────────────────────────────
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL   = "llama3-8b-8192"
+GROQ_MODEL   = "llama-3.1-8b-instant"
 
 JARVIS_SYSTEM = """You are JARVIS — Joint Artificially Responsive Virtual Intelligence System.
 You are a highly advanced AI assistant with a sleek, professional, slightly witty personality.
