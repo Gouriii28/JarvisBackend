@@ -68,6 +68,8 @@ async def chat(req: ChatRequest):
                 json={"model": GROQ_MODEL, "messages": messages, "max_tokens": 1024},
             )
 
+        print("GROQ RESPONSE:", resp.text)
+
         if resp.status_code != 200:
             raise HTTPException(status_code=502, detail=f"Groq API error: {resp.text}")
 
